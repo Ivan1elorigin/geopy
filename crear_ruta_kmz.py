@@ -202,6 +202,48 @@ def resolver_puntos(
     return puntos
 
 
+def consultar_osrm(url: str, timeout: int) -> dict:
+    peticion = Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urlopen(peticion, timeout=timeout) as respuesta:
+            return json.load(respuesta)
+    except HTTPError as error:
+        raise RuntimeError(
+            f"el servidor de rutas respondió con HTTP {error.code}."
+        ) from error
+    except URLError as error:
+        raise RuntimeError(
+            f"no se pudo conectar con el servidor de rutas: {error.reason}"
+        ) from error
+    except JSONDecodeError as error:
+        raise RuntimeError(
+            "el servidor de rutas devolvió una respuesta no válida."
+        ) from error
+
+
+def convertir_ruta_osrm(ruta: dict) -> RutaCalculada:
+    geometria = ruta.get("geometry", {}).get("coordinates")
+    if not geometria:
+        raise RuntimeError("la ruta recibida no contiene geometría.")
+
+    coordenadas_kml = [
+        (float(longitud), float(latitud))
+        for longitud, latitud in geometria
+    ]
+    return RutaCalculada(
+        coordenadas=coordenadas_kml,
+        distancia_km=float(ruta["distance"]) / 1000,
+        duracion_segundos=float(ruta["duration"]),
+    )
+
+
 def solicitar_ruta(
     puntos: list[PuntoRuta],
     medio: str,
@@ -222,48 +264,75 @@ def solicitar_ruta(
         }
     )
     url = f"{SERVIDORES_OSRM[medio]}/{coordenadas_url}?{parametros}"
-    peticion = Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        },
-    )
-
-    try:
-        with urlopen(peticion, timeout=timeout) as respuesta:
-            datos = json.load(respuesta)
-    except HTTPError as error:
-        raise RuntimeError(
-            f"el servidor de rutas respondió con HTTP {error.code}."
-        ) from error
-    except URLError as error:
-        raise RuntimeError(
-            f"no se pudo conectar con el servidor de rutas: {error.reason}"
-        ) from error
-    except JSONDecodeError as error:
-        raise RuntimeError(
-            "el servidor de rutas devolvió una respuesta no válida."
-        ) from error
+    datos = consultar_osrm(url, timeout)
 
     if datos.get("code") != "Ok" or not datos.get("routes"):
         mensaje = datos.get("message", "no se encontró una ruta.")
         raise RuntimeError(f"error del servidor de rutas: {mensaje}")
 
-    ruta = datos["routes"][0]
-    geometria = ruta.get("geometry", {}).get("coordinates")
-    if not geometria:
-        raise RuntimeError("la ruta recibida no contiene geometría.")
+    return convertir_ruta_osrm(datos["routes"][0])
 
-    coordenadas_kml = [
-        (float(longitud), float(latitud))
-        for longitud, latitud in geometria
-    ]
-    return RutaCalculada(
-        coordenadas=coordenadas_kml,
-        distancia_km=float(ruta["distance"]) / 1000,
-        duracion_segundos=float(ruta["duration"]),
+
+def solicitar_ruta_optimizada(
+    puntos: list[PuntoRuta],
+    medio: str,
+    timeout: int = 30,
+) -> tuple[RutaCalculada, list[PuntoRuta]]:
+    if len(puntos) < 2:
+        raise ValueError("se necesitan al menos dos puntos válidos.")
+
+    if len(puntos) == 2:
+        return solicitar_ruta(puntos, medio, timeout), puntos
+
+    coordenadas_url = ";".join(
+        f"{punto.longitud:.7f},{punto.latitud:.7f}"
+        for punto in puntos
     )
+    parametros = urlencode(
+        {
+            "source": "first",
+            "destination": "last",
+            "roundtrip": "false",
+            "overview": "full",
+            "geometries": "geojson",
+            "steps": "false",
+        }
+    )
+    servidor_trip = SERVIDORES_OSRM[medio].replace(
+        "/route/v1/",
+        "/trip/v1/",
+    )
+    url = f"{servidor_trip}/{coordenadas_url}?{parametros}"
+    datos = consultar_osrm(url, timeout)
+
+    if datos.get("code") != "Ok" or not datos.get("trips"):
+        mensaje = datos.get("message", "no se pudo optimizar la ruta.")
+        raise RuntimeError(f"error del servidor de rutas: {mensaje}")
+
+    waypoints = datos.get("waypoints", [])
+    if len(waypoints) != len(puntos):
+        raise RuntimeError(
+            "el servidor no devolvió el orden de todos los puntos."
+        )
+
+    indices = [waypoint.get("waypoint_index") for waypoint in waypoints]
+    if (
+        any(not isinstance(indice, int) for indice in indices)
+        or sorted(indices) != list(range(len(puntos)))
+    ):
+        raise RuntimeError(
+            "el servidor devolvió un orden de puntos no válido."
+        )
+
+    puntos_ordenados = [
+        punto
+        for _, punto in sorted(
+            zip(indices, puntos),
+            key=lambda elemento: elemento[0],
+        )
+    ]
+    ruta = convertir_ruta_osrm(datos["trips"][0])
+    return ruta, puntos_ordenados
 
 
 def limpiar_nombre(texto: str, longitud_maxima: int = 35) -> str:
@@ -290,6 +359,7 @@ def guardar_ruta_kmz(
     ruta: RutaCalculada,
     medio: str,
     archivo_salida: str | None = None,
+    optimizada: bool = False,
 ) -> Path:
     if archivo_salida is None:
         archivo_salida = crear_nombre_ruta(
@@ -298,18 +368,19 @@ def guardar_ruta_kmz(
             ruta.distancia_km,
         )
 
+    tipo_ruta = "Ruta optimizada" if optimizada else "Ruta"
     kml = simplekml.Kml()
     kml.document.name = (
-        f"Ruta de {ruta.distancia_km:.2f} km en {medio}"
+        f"{tipo_ruta} de {ruta.distancia_km:.2f} km en {medio}"
     )
     kml.document.description = (
-        "Ruta calculada con OSRM y datos de OpenStreetMap.<br>"
+        f"{tipo_ruta} calculada con OSRM y datos de OpenStreetMap.<br>"
         "© OpenStreetMap contributors (ODbL).<br>"
         "Corregir el mapa: https://www.openstreetmap.org/fixthemap"
     )
 
     linea = kml.newlinestring(
-        name=f"Ruta en {medio}",
+        name=f"{tipo_ruta} en {medio}",
         description=(
             f"Distancia total: {ruta.distancia_km:.2f} km<br>"
             f"Duración estimada: {ruta.duracion_segundos / 60:.0f} minutos"
@@ -374,6 +445,14 @@ def crear_parser() -> argparse.ArgumentParser:
         "--salida",
         help="Nombre opcional del archivo KMZ.",
     )
+    parser.add_argument(
+        "--optimiza",
+        action="store_true",
+        help=(
+            "Optimiza las paradas intermedias manteniendo fijos "
+            "el origen y el destino."
+        ),
+    )
     return parser
 
 
@@ -391,18 +470,33 @@ def main() -> None:
                 "los no encontrados o ambiguos."
             )
 
-        ruta = solicitar_ruta(puntos, argumentos.medio)
+        if argumentos.optimiza:
+            ruta, puntos = solicitar_ruta_optimizada(
+                puntos,
+                argumentos.medio,
+            )
+        else:
+            ruta = solicitar_ruta(puntos, argumentos.medio)
+
         archivo = guardar_ruta_kmz(
             puntos,
             ruta,
             argumentos.medio,
             argumentos.salida,
+            optimizada=argumentos.optimiza,
         )
     except (ValueError, RuntimeError, GeocoderServiceError) as error:
         raise SystemExit(f"Error: {error}") from error
 
     print(f"Puntos válidos: {len(puntos)}")
     print(f"Medio: {argumentos.medio}")
+    print(
+        "Optimización: "
+        f"{'activada' if argumentos.optimiza else 'desactivada'}"
+    )
+    print("Orden final:")
+    for indice, punto in enumerate(puntos, start=1):
+        print(f"  {indice}. {punto.nombre}")
     print(f"Distancia total: {ruta.distancia_km:.2f} km")
     print(f"Duración estimada: {ruta.duracion_segundos / 60:.0f} minutos")
     print(f"Archivo creado: {archivo}")

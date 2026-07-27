@@ -4,8 +4,9 @@ El módulo `crear_ruta_kmz.py` calcula una ruta entre varias ubicaciones o
 coordenadas y la guarda en un archivo KMZ compatible con Google Earth y otros
 programas cartográficos.
 
-La ruta respeta el orden de los puntos introducidos. No intenta encontrar un
-orden más corto.
+De forma predeterminada, la ruta respeta el orden de los puntos introducidos.
+La flag `--optimiza` permite buscar un orden más corto para las paradas
+intermedias.
 
 ## 📦 Requisitos
 
@@ -67,7 +68,24 @@ python crear_ruta_kmz.py "41.5632,2.0089" "Sabadell, España" "Barcelona, Españ
 ```
 
 Los puntos se recorren exactamente en el orden en el que aparecen en la
-orden.
+orden, excepto cuando se utiliza `--optimiza`.
+
+## 🔄 Optimizar el recorrido
+
+La flag `--optimiza` mantiene fijos el primer punto como origen y el último
+como destino, pero reorganiza las paradas intermedias para intentar reducir el
+recorrido:
+
+```powershell
+python crear_ruta_kmz.py "Terrassa" "Barcelona" "Sabadell" "Girona" --medio coche --optimiza
+```
+
+Al terminar, el programa muestra en la terminal el orden final de todos los
+puntos. Los marcadores del KMZ utilizan ese mismo orden.
+
+La optimización de OSRM utiliza un método heurístico. Normalmente obtiene un
+recorrido más corto, pero con listas grandes no garantiza que sea la solución
+óptima absoluta.
 
 ## 🌍 Seleccionar el idioma
 
@@ -117,6 +135,7 @@ python crear_ruta_kmz.py "Terrassa" "Barcelona" --medio coche --salida ruta_trab
 | `--medio` | Sí | `coche`, `bici` o `caminando`. |
 | `--idioma` | No | Idioma de las direcciones. Por defecto, `es`. |
 | `--salida` | No | Nombre o ruta del archivo KMZ. |
+| `--optimiza` | No | Reordena las paradas intermedias. |
 
 Para consultar la ayuda desde la terminal:
 
@@ -188,4 +207,10 @@ Ruta a pie combinando tipos de punto:
 
 ```powershell
 python crear_ruta_kmz.py "Plaça de Catalunya, Barcelona" "41.3870,2.1701" "Sagrada Família, Barcelona" --medio caminando
+```
+
+Ruta optimizada manteniendo origen y destino:
+
+```powershell
+python crear_ruta_kmz.py "Terrassa" "Barcelona" "Sabadell" "Girona" --medio coche --optimiza
 ```
