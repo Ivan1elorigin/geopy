@@ -54,6 +54,23 @@ def crear_nombre_kmz(ubicacion: str, radio_km: float) -> str:
     return f"{nombre}_{radio}km.kmz"
 
 
+def crear_nombre_coordenadas_kmz(
+    latitud: float,
+    longitud: float,
+    radio_km: float,
+) -> str:
+    latitud_texto = f"{abs(latitud):g}".replace(".", "_")
+    longitud_texto = f"{abs(longitud):g}".replace(".", "_")
+    hemisferio_latitud = "n" if latitud >= 0 else "s"
+    hemisferio_longitud = "e" if longitud >= 0 else "o"
+    radio = f"{radio_km:g}".replace(".", "_")
+
+    return (
+        f"coordenadas_{latitud_texto}{hemisferio_latitud}_"
+        f"{longitud_texto}{hemisferio_longitud}_{radio}km.kmz"
+    )
+
+
 def crear_area_desde_ubicacion(
     ubicacion: str,
     radio_km: float,
@@ -79,15 +96,53 @@ def crear_area_desde_ubicacion(
     return ruta_kmz, latitud, longitud, direccion
 
 
+def crear_area_desde_coordenadas(
+    latitud: float,
+    longitud: float,
+    radio_km: float,
+    archivo_salida: str | None = None,
+    numero_vertices: int = 180,
+) -> tuple[Path, float, float, str]:
+    """
+    Crea un KMZ directamente desde un par de coordenadas.
+    """
+    referencia = f"Coordenadas {latitud:g}, {longitud:g}"
+
+    if archivo_salida is None:
+        archivo_salida = crear_nombre_coordenadas_kmz(
+            latitud,
+            longitud,
+            radio_km,
+        )
+
+    ruta_kmz = crear_area_kmz(
+        latitud=latitud,
+        longitud=longitud,
+        radio_km=radio_km,
+        archivo_salida=archivo_salida,
+        numero_vertices=numero_vertices,
+    )
+
+    return ruta_kmz, latitud, longitud, referencia
+
+
 def crear_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Busca las coordenadas de una ubicación y genera un área KMZ."
+            "Genera un área KMZ desde una ubicación o unas coordenadas."
         )
     )
     parser.add_argument(
         "ubicacion",
+        nargs="?",
         help='Dirección o lugar que se quiere buscar, entre comillas.',
+    )
+    parser.add_argument(
+        "--coordenadas",
+        nargs=2,
+        type=float,
+        metavar=("LATITUD", "LONGITUD"),
+        help="Usa directamente una latitud y una longitud.",
     )
     parser.add_argument(
         "--radio",
@@ -109,19 +164,40 @@ def crear_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    argumentos = crear_parser().parse_args()
+    parser = crear_parser()
+    argumentos = parser.parse_args()
+
+    if argumentos.ubicacion is None and argumentos.coordenadas is None:
+        parser.error("indica una ubicación o utiliza --coordenadas.")
+
+    if argumentos.ubicacion is not None and argumentos.coordenadas is not None:
+        parser.error(
+            "no puedes indicar una ubicación y --coordenadas a la vez."
+        )
 
     try:
-        ruta, latitud, longitud, direccion = crear_area_desde_ubicacion(
-            ubicacion=argumentos.ubicacion,
-            radio_km=argumentos.radio,
-            archivo_salida=argumentos.salida,
-            numero_vertices=argumentos.vertices,
-        )
+        if argumentos.coordenadas is not None:
+            latitud, longitud = argumentos.coordenadas
+            ruta, latitud, longitud, referencia = (
+                crear_area_desde_coordenadas(
+                    latitud=latitud,
+                    longitud=longitud,
+                    radio_km=argumentos.radio,
+                    archivo_salida=argumentos.salida,
+                    numero_vertices=argumentos.vertices,
+                )
+            )
+        else:
+            ruta, latitud, longitud, referencia = crear_area_desde_ubicacion(
+                ubicacion=argumentos.ubicacion,
+                radio_km=argumentos.radio,
+                archivo_salida=argumentos.salida,
+                numero_vertices=argumentos.vertices,
+            )
     except (ValueError, GeocoderServiceError) as error:
         raise SystemExit(f"Error: {error}") from error
 
-    print(f"Ubicación encontrada: {direccion}")
+    print(f"Referencia: {referencia}")
     print(f"Latitud: {latitud}")
     print(f"Longitud: {longitud}")
     print(f"Archivo creado: {ruta}")
