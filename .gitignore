@@ -1,3 +1,4 @@
 .obsidian/
 *.ipynb
 *.kmz
+__pycache__/
