@@ -1,12 +1,55 @@
 import argparse
 import re
 import unicodedata
+from math import pi, sqrt
 from pathlib import Path
 
 from geopy.exc import GeocoderServiceError
 from geopy.geocoders import Nominatim
 
 from crear_area_kmz import crear_area_kmz
+
+
+def normalizar_unidad(unidad: str) -> str:
+    texto = unicodedata.normalize("NFKD", unidad)
+    texto = texto.encode("ascii", "ignore").decode("ascii").lower()
+    unidades = {
+        "km": "km",
+        "kilometro": "km",
+        "kilometros": "km",
+        "m": "m",
+        "metro": "m",
+        "metros": "m",
+        "ha": "ha",
+        "hectarea": "ha",
+        "hectareas": "ha",
+        "mi": "mi",
+        "milla": "mi",
+        "millas": "mi",
+    }
+
+    try:
+        return unidades[texto]
+    except KeyError as error:
+        raise argparse.ArgumentTypeError(
+            "la unidad debe ser km, m, ha o mi."
+        ) from error
+
+
+def convertir_a_kilometros(valor: float, unidad: str) -> float:
+    if valor <= 0:
+        raise ValueError("El radio o área debe ser mayor que cero.")
+
+    if unidad == "km":
+        return valor
+    if unidad == "m":
+        return valor / 1000
+    if unidad == "mi":
+        return valor * 1.609344
+    if unidad == "ha":
+        return sqrt(valor * 10_000 / pi) / 1000
+
+    raise ValueError(f"Unidad no reconocida: {unidad}")
 
 
 def buscar_coordenadas(
@@ -43,7 +86,11 @@ def buscar_coordenadas(
     return resultado.latitude, resultado.longitude, resultado.address
 
 
-def crear_nombre_kmz(ubicacion: str, radio_km: float) -> str:
+def crear_nombre_kmz(
+    ubicacion: str,
+    radio: float,
+    unidad: str = "km",
+) -> str:
     """
     Crea un nombre de archivo válido a partir de la ubicación buscada.
     """
@@ -55,24 +102,26 @@ def crear_nombre_kmz(ubicacion: str, radio_km: float) -> str:
     if not nombre:
         nombre = "ubicacion"
 
-    radio = f"{radio_km:g}".replace(".", "_")
-    return f"{nombre}_{radio}km.kmz"
+    radio_texto = f"{radio:g}".replace(".", "_")
+    return f"{nombre}_{radio_texto}{unidad}.kmz"
 
 
 def crear_nombre_coordenadas_kmz(
     latitud: float,
     longitud: float,
-    radio_km: float,
+    radio: float,
+    unidad: str = "km",
 ) -> str:
     latitud_texto = f"{abs(latitud):g}".replace(".", "_")
     longitud_texto = f"{abs(longitud):g}".replace(".", "_")
     hemisferio_latitud = "n" if latitud >= 0 else "s"
     hemisferio_longitud = "e" if longitud >= 0 else "o"
-    radio = f"{radio_km:g}".replace(".", "_")
+    radio_texto = f"{radio:g}".replace(".", "_")
 
     return (
         f"coordenadas_{latitud_texto}{hemisferio_latitud}_"
-        f"{longitud_texto}{hemisferio_longitud}_{radio}km.kmz"
+        f"{longitud_texto}{hemisferio_longitud}_"
+        f"{radio_texto}{unidad}.kmz"
     )
 
 
@@ -157,7 +206,16 @@ def crear_parser() -> argparse.ArgumentParser:
         "--radio",
         type=float,
         default=10,
-        help="Radio del área en kilómetros (por defecto: 10).",
+        help=(
+            "Radio del área; con hectáreas representa la superficie "
+            "(por defecto: 10)."
+        ),
+    )
+    parser.add_argument(
+        "--unidad",
+        type=normalizar_unidad,
+        default="km",
+        help="Unidad del radio: km, m, mi o ha (por defecto: km).",
     )
     parser.add_argument(
         "--salida",
@@ -193,22 +251,44 @@ def main() -> None:
         )
 
     try:
+        radio_km = convertir_a_kilometros(
+            argumentos.radio,
+            argumentos.unidad,
+        )
+
         if argumentos.coordenadas is not None:
             latitud, longitud = argumentos.coordenadas
+            archivo_salida = argumentos.salida
+            if archivo_salida is None:
+                archivo_salida = crear_nombre_coordenadas_kmz(
+                    latitud,
+                    longitud,
+                    argumentos.radio,
+                    argumentos.unidad,
+                )
+
             ruta, latitud, longitud, referencia = (
                 crear_area_desde_coordenadas(
                     latitud=latitud,
                     longitud=longitud,
-                    radio_km=argumentos.radio,
-                    archivo_salida=argumentos.salida,
+                    radio_km=radio_km,
+                    archivo_salida=archivo_salida,
                     numero_vertices=argumentos.vertices,
                 )
             )
         else:
+            archivo_salida = argumentos.salida
+            if archivo_salida is None:
+                archivo_salida = crear_nombre_kmz(
+                    argumentos.ubicacion,
+                    argumentos.radio,
+                    argumentos.unidad,
+                )
+
             ruta, latitud, longitud, referencia = crear_area_desde_ubicacion(
                 ubicacion=argumentos.ubicacion,
-                radio_km=argumentos.radio,
-                archivo_salida=argumentos.salida,
+                radio_km=radio_km,
+                archivo_salida=archivo_salida,
                 numero_vertices=argumentos.vertices,
                 idioma=argumentos.idioma,
             )
@@ -218,6 +298,7 @@ def main() -> None:
     print(f"Referencia: {referencia}")
     print(f"Latitud: {latitud}")
     print(f"Longitud: {longitud}")
+    print(f"Radio geodésico utilizado: {radio_km:g} km")
     print(f"Archivo creado: {ruta}")
 
 
