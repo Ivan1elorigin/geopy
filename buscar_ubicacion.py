@@ -11,6 +11,7 @@ from crear_area_kmz import crear_area_kmz
 
 def buscar_coordenadas(
     ubicacion: str,
+    idioma: str = "es",
     timeout: int = 10,
 ) -> tuple[float, float, str]:
     """
@@ -20,13 +21,17 @@ def buscar_coordenadas(
     if not ubicacion:
         raise ValueError("La ubicación de búsqueda no puede estar vacía.")
 
+    idioma = idioma.strip()
+    if not idioma:
+        raise ValueError("El idioma no puede estar vacío.")
+
     geolocalizador = Nominatim(
         user_agent="curso-geopy-ivan-a/1.0",
         timeout=timeout,
     )
     resultado = geolocalizador.geocode(
         ubicacion,
-        language="es",
+        language=idioma,
         exactly_one=True,
     )
 
@@ -76,11 +81,15 @@ def crear_area_desde_ubicacion(
     radio_km: float,
     archivo_salida: str | None = None,
     numero_vertices: int = 180,
+    idioma: str = "es",
 ) -> tuple[Path, float, float, str]:
     """
     Busca una ubicación y crea un KMZ con un área a su alrededor.
     """
-    latitud, longitud, direccion = buscar_coordenadas(ubicacion)
+    latitud, longitud, direccion = buscar_coordenadas(
+        ubicacion,
+        idioma=idioma,
+    )
 
     if archivo_salida is None:
         archivo_salida = crear_nombre_kmz(ubicacion, radio_km)
@@ -160,6 +169,14 @@ def crear_parser() -> argparse.ArgumentParser:
         default=180,
         help="Número de vértices del círculo (por defecto: 180).",
     )
+    parser.add_argument(
+        "--idioma",
+        default="es",
+        help=(
+            "Idioma de la dirección devuelta por el buscador "
+            "(por defecto: es)."
+        ),
+    )
     return parser
 
 
@@ -193,6 +210,7 @@ def main() -> None:
                 radio_km=argumentos.radio,
                 archivo_salida=argumentos.salida,
                 numero_vertices=argumentos.vertices,
+                idioma=argumentos.idioma,
             )
     except (ValueError, GeocoderServiceError) as error:
         raise SystemExit(f"Error: {error}") from error
